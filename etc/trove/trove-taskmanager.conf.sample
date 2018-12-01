@@ -246,3 +246,10 @@ volume_support = True
 device_path = /dev/vdb
 mount_point = /var/lib/vertica
 taskmanager_strategy = trove.common.strategies.cluster.experimental.vertica.taskmanager.VerticaTaskManagerStrategy
+
+[tidb]
+tcp_ports = 4000, 10080, 20160, 2379, 2380, 8250, 9090, 9091, 9100, 9115, 3000, 8686, 9308
+volume_support = True
+device_path = /dev/vdb
+num_tidb_servers_per_cluster = 3
+num_pd_servers_per_cluster = 3

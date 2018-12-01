@@ -365,7 +365,8 @@ common_opts = [
                          'couchdb': 'f0a9ab7b-66f7-4352-93d7-071521d44c7c',
                          'vertica': 'a8d805ae-a3b2-c4fd-gb23-b62cee5201ae',
                          'db2': 'e040cd37-263d-4869-aaa6-c62aa97523b5',
-                         'mariadb': '7a4f82cc-10d2-4bc6-aadc-d9aacc2a3cb5'},
+                         'mariadb': '7a4f82cc-10d2-4bc6-aadc-d9aacc2a3cb5',
+                         'mongodb': 'c8b907cf-7375-456e-b929-b637ff9209ee',},
                 help='Unique ID to tag notification events.'),
     cfg.StrOpt('nova_proxy_admin_user', default='',
                help="Admin username used to connect to Nova.", secret=True),
@@ -1512,6 +1513,79 @@ mariadb_opts = [
                deprecated_group='DEFAULT'),
 ]
 
+# TiDB
+tidb_group = cfg.OptGroup(
+    'tidb', title='TiDB options',
+    help="Oslo option group designed for TiDB datastore")
+tidb_opts = [
+    cfg.BoolOpt('icmp', default=False,
+                help='Whether to permit ICMP.'),
+    cfg.ListOpt('tcp_ports', default=["4000", "10080", "20160", "2379", "2380", "8250"],
+                item_type=ListOfPortsType,
+                help='List of TCP ports and/or port ranges to open '
+                     'in the security group (only applicable '
+                     'if trove_security_groups_support is True).'),
+    cfg.ListOpt('udp_ports', default=[], item_type=ListOfPortsType,
+                help='List of UDP ports and/or port ranges to open '
+                     'in the security group (only applicable '
+                     'if trove_security_groups_support is True).'),
+    cfg.StrOpt('mount_point', default='/data',
+               help="Filesystem path for mounting "
+               "volumes if volume support is enabled."),
+    cfg.BoolOpt('volume_support', default=True,
+                help='Whether to provision a Cinder volume for datadir.'),
+    cfg.StrOpt('device_path', default='/dev/vdb',
+               help='Device path for volume if volume support is enabled.'),
+    cfg.IntOpt('num_tidb_servers_per_cluster', default=3,
+               help='The number of config servers to create per cluster.'),
+    cfg.IntOpt('num_pd_servers_per_cluster', default=3,
+               help='The number of pd servers to create '
+                    'per cluster.'),
+    cfg.BoolOpt('cluster_support', default=True,
+                help='Enable clusters to be created and managed.'),
+    cfg.StrOpt('api_strategy',
+               default='trove.common.strategies.cluster.experimental.'
+               'tidb.api.TiDbAPIStrategy',
+               help='Class that implements datastore-specific API logic.'),
+    cfg.StrOpt('taskmanager_strategy',
+               default='trove.common.strategies.cluster.experimental.tidb.'
+               'taskmanager.TiDbTaskManagerStrategy',
+               help='Class that implements datastore-specific task manager '
+                    'logic.'),
+    cfg.StrOpt('guestagent_strategy',
+               default='trove.common.strategies.cluster.experimental.'
+               'tidb.guestagent.TiDbGuestAgentStrategy',
+               help='Class that implements datastore-specific Guest Agent API '
+                    'logic.'),
+    cfg.PortOpt('tidb_port', default=4000,
+                help='Port for tidb instances.'),
+    cfg.PortOpt('tidb_status_port', default=27019,
+                help='Port for tidb status instances.'),
+    cfg.PortOpt('tikv_port', default=20160,
+                help='Port for tikv instances.'),
+    cfg.PortOpt('pd_client_port', default=2379,
+                help='Port for pd client instances.'),
+    cfg.PortOpt('pd_peer_port', default=2380,
+                help='Port for pd peer instances.'),
+    cfg.PortOpt('pump_port', default=8250,
+                help='Port for pump instances.'),
+    cfg.ListOpt('ignore_users', default=['admin.os_admin', 'admin.root'],
+                help='Users to exclude when listing users.'),
+    cfg.IntOpt('add_members_timeout', default=300,
+               help='Maximum time to wait (in seconds) for a replica set '
+                    'initialization process to complete.'),
+    cfg.StrOpt('root_controller',
+               default='trove.extensions.tidb.service.'
+                       'TiDBRootController',
+               help='Root controller implementation for tidb.'),
+    cfg.StrOpt('guest_log_exposed_logs', default='',
+               help='List of Guest Logs to expose for publishing.'),
+    cfg.IntOpt('default_password_length', default=36,
+               help='Character length of generated passwords.',
+               deprecated_name='default_password_length',
+               deprecated_group='DEFAULT'),
+]
+
 # RPC version groups
 upgrade_levels = cfg.OptGroup(
     'upgrade_levels',
@@ -1551,6 +1625,7 @@ CONF.register_group(couchdb_group)
 CONF.register_group(vertica_group)
 CONF.register_group(db2_group)
 CONF.register_group(mariadb_group)
+CONF.register_group(tidb_group)
 
 CONF.register_opts(mysql_opts, mysql_group)
 CONF.register_opts(percona_opts, percona_group)
@@ -1564,6 +1639,7 @@ CONF.register_opts(couchdb_opts, couchdb_group)
 CONF.register_opts(vertica_opts, vertica_group)
 CONF.register_opts(db2_opts, db2_group)
 CONF.register_opts(mariadb_opts, mariadb_group)
+CONF.register_opts(tidb_opts, tidb_group)
 
 CONF.register_opts(rpcapi_cap_opts, upgrade_levels)
 
