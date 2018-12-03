@@ -1529,7 +1529,7 @@ tidb_opts = [
                 help='List of UDP ports and/or port ranges to open '
                      'in the security group (only applicable '
                      'if trove_security_groups_support is True).'),
-    cfg.StrOpt('mount_point', default='/data',
+    cfg.StrOpt('mount_point', default='/opt/data',
                help="Filesystem path for mounting "
                "volumes if volume support is enabled."),
     cfg.BoolOpt('volume_support', default=True,
