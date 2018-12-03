@@ -1539,8 +1539,7 @@ tidb_opts = [
     cfg.IntOpt('num_tidb_servers_per_cluster', default=3,
                help='The number of config servers to create per cluster.'),
     cfg.IntOpt('num_pd_servers_per_cluster', default=3,
-               help='The number of pd servers to create '
-                    'per cluster.'),
+               help='The number of pd servers to create per cluster.'),
     cfg.BoolOpt('cluster_support', default=True,
                 help='Enable clusters to be created and managed.'),
     cfg.StrOpt('api_strategy',

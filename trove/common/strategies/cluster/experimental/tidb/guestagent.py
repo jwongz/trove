@@ -43,63 +43,30 @@ class TiDbGuestAgentAPI(guest_api.API):
     appropriate in this file
     """
 
-    def add_shard(self, replica_set_name, replica_set_member):
-        LOG.debug("Adding shard with replSet %(replica_set_name)s and member "
-                  "%(replica_set_member)s for instance "
-                  "%(id)s", {'replica_set_name': replica_set_name,
-                             'replica_set_member': replica_set_member,
-                             'id': self.id})
-        version = guest_api.API.API_BASE_VERSION
-
-        return self._call("add_shard", self.agent_high_timeout,
-                          version=version,
-                          replica_set_name=replica_set_name,
-                          replica_set_member=replica_set_member)
-
-    def add_members(self, members):
+    def add_tikv(self, members):
         LOG.debug("Adding members %(members)s on instance %(id)s", {
             'members': members, 'id': self.id})
         version = guest_api.API.API_BASE_VERSION
 
-        return self._call("add_members", CONF.mongodb.add_members_timeout,
+        return self._call("add_tikv", CONF.tidb.add_members_timeout,
                           version=version, members=members)
 
-    def add_config_servers(self, config_servers):
-        LOG.debug("Adding config servers %(config_servers)s for instance "
-                  "%(id)s", {'config_servers': config_servers,
+    def add_pd_servers(self, pd_servers):
+        LOG.debug("Adding pd_servers %(config_servers)s for instance "
+                  "%(id)s", {'pd_servers': config_servers,
                              'id': self.id})
         version = guest_api.API.API_BASE_VERSION
 
-        return self._call("add_config_servers", self.agent_high_timeout,
+        return self._call("add_pd_servers", self.agent_high_timeout,
                           version=version,
-                          config_servers=config_servers)
+                          config_servers=pd_servers)
 
-    def cluster_complete(self):
-        LOG.debug("Notify regarding cluster install completion")
+    def add_tidb_servers(self, tidb_servers):
+        LOG.debug("Adding tidb_servers %(config_servers)s for instance "
+                  "%(id)s", {'tidb_servers': tidb_servers,
+                             'id': self.id})
         version = guest_api.API.API_BASE_VERSION
 
-        return self._call("cluster_complete", self.agent_high_timeout,
-                          version=version)
-
-    def get_key(self):
-        LOG.debug("Requesting cluster key from guest")
-        version = guest_api.API.API_BASE_VERSION
-
-        return self._call("get_key", self.agent_low_timeout,
-                          version=version)
-
-    def prep_primary(self):
-        LOG.debug("Preparing member to be primary member.")
-        version = guest_api.API.API_BASE_VERSION
-
-        return self._call("prep_primary", self.agent_high_timeout,
-                          version=version)
-
-    def is_shard_active(self, replica_set_name):
-        LOG.debug("Checking if replica set %s is active", replica_set_name)
-        version = guest_api.API.API_BASE_VERSION
-
-        return self._call("is_shard_active",
-                          self.agent_high_timeout,
+        return self._call("add_tidb_servers", self.agent_high_timeout,
                           version=version,
-                          replica_set_name=replica_set_name)
+                          config_servers=tidb_servers)                     

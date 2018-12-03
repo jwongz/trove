@@ -72,11 +72,6 @@ class TiDbApp(object):
             system.PACKAGER.pkg_install(packages, {}, system.TIME_OUT)
         LOG.info("Finished installing TiDb server.")
 
-    def _get_service_candidates(self):
-        if self.is_query_router:
-            return system.MONGOS_SERVICE_CANDIDATES
-        return system.MONGOD_SERVICE_CANDIDATES
-
     def stop_db(self, update_db=False, do_not_start_on_reboot=False):
         self.status.stop_db_service(
             self._get_service_candidates(), self.state_change_wait_time,
@@ -111,14 +106,11 @@ class TiDbApp(object):
 
         # TiDb init scripts assume the PID-file path is writable by the
         # database service.
-        # See: https://jira.mongodb.org/browse/SERVER-20075
         self._initialize_writable_run_dir()
 
         self.configuration_manager.apply_system_override(
             {'processManagement.fork': False,
-             'processManagement.pidFilePath': system.MONGO_PID_FILE,
              'systemLog.destination': 'file',
-             'systemLog.path': system.MONGO_LOG_FILE,
              'systemLog.logAppend': True
              })
 
@@ -129,38 +121,25 @@ class TiDbApp(object):
         if cluster_config is not None:
             self._configure_as_cluster_instance(cluster_config)
         else:
-            self._configure_network(MONGODB_PORT)
-
-    def _initialize_writable_run_dir(self):
-        """Create a writable directory for TiDb's runtime data
-        (e.g. PID-file).
-        """
-        mongodb_run_dir = os.path.dirname(system.MONGO_PID_FILE)
-        LOG.debug("Initializing a runtime directory: %s", mongodb_run_dir)
-        operating_system.create_directory(
-            mongodb_run_dir, user=system.MONGO_USER, group=system.MONGO_USER,
-            force=True, as_root=True)
+            self._configure_network(TIDB_PORT)
 
     def _configure_as_cluster_instance(self, cluster_config):
         """Configure this guest as a cluster instance and return its
         new status.
         """
-        if cluster_config['instance_type'] == "query_router":
-            self._configure_as_query_router()
-        elif cluster_config["instance_type"] == "config_server":
-            self._configure_as_config_server()
-        elif cluster_config["instance_type"] == "member":
-            self._configure_as_cluster_member(
+        if cluster_config['instance_type'] == "tidb_server":
+            self._configure_as_tidb_server()
+        elif cluster_config["instance_type"] == "pd_server":
+            self._configure_as_pd_server()
+        elif cluster_config["instance_type"] == "tikv":
+            self._configure_as_tikv_server(
                 cluster_config['replica_set_name'])
         else:
             LOG.error("Bad cluster configuration; instance type "
                       "given as %s.", cluster_config['instance_type'])
             return ds_instance.ServiceStatuses.FAILED
 
-        if 'key' in cluster_config:
-            self._configure_cluster_security(cluster_config['key'])
-
-    def _configure_as_query_router(self):
+    def _configure_as_tidb_server(self):
         LOG.info("Configuring instance as a cluster query router.")
         self.is_query_router = True
 
@@ -184,13 +163,13 @@ class TiDbApp(object):
         self.configuration_manager.apply_system_override(
             {'sharding.configDB': ''}, CNF_CLUSTER)
 
-    def _configure_as_config_server(self):
+    def _configure_as_pd_server(self):
         LOG.info("Configuring instance as a cluster config server.")
         self._configure_network(CONFIGSVR_PORT)
         self.configuration_manager.apply_system_override(
             {'sharding.clusterRole': 'configsvr'}, CNF_CLUSTER)
 
-    def _configure_as_cluster_member(self, replica_set_name):
+    def _configure_as_tikv_server(self, replica_set_name):
         LOG.info("Configuring instance as a cluster member.")
         self.is_cluster_member = True
         self._configure_network(MONGODB_PORT)
@@ -201,18 +180,6 @@ class TiDbApp(object):
         self.start_db()
         self.configuration_manager.apply_system_override(
             {'replication.replSetName': replica_set_name}, CNF_CLUSTER)
-
-    def _configure_cluster_security(self, key_value):
-        """Force cluster key-file-based authentication.
-
-        This will enabled RBAC.
-        """
-        # Store the cluster member authentication key.
-        self.store_key(key_value)
-
-        self.configuration_manager.apply_system_override(
-            {'security.clusterAuthMode': 'keyFile',
-             'security.keyFile': self.get_key_file()}, CNF_CLUSTER)
 
     def _configure_network(self, port=None):
         """Make the service accessible at a given (or default if not) port.
@@ -226,154 +193,11 @@ class TiDbApp(object):
         self.configuration_manager.apply_system_override(options)
         self.status.set_host(instance_ip, port=port)
 
-    def clear_storage(self):
-        mount_point = "/var/lib/mongodb/*"
-        LOG.debug("Clearing storage at %s.", mount_point)
-        try:
-            operating_system.remove(mount_point, force=True, as_root=True)
-        except exception.ProcessExecutionError:
-            LOG.exception("Error clearing storage.")
-
-    def _has_config_db(self):
-        value_string = self.configuration_manager.get_value(
-            'sharding', {}).get('configDB')
-
-        return value_string is not None
-
-    # FIXME(pmalik): This method should really be called 'set_config_servers'.
-    # The current name suggests it adds more config servers, but it
-    # rather replaces the existing ones.
-    def add_config_servers(self, config_server_hosts):
-        """Set config servers on a query router (mongos) instance.
-        """
-        config_servers_string = ','.join(['%s:%s' % (host, CONFIGSVR_PORT)
-                                          for host in config_server_hosts])
-        LOG.info("Setting config servers: %s", config_servers_string)
-        self.configuration_manager.apply_system_override(
-            {'sharding.configDB': config_servers_string}, CNF_CLUSTER)
-        self.start_db(True)
-
-    def add_shard(self, replica_set_name, replica_set_member):
-        """
-        This method is used by query router (mongos) instances.
-        """
-        url = "%(rs)s/%(host)s:%(port)s"\
-              % {'rs': replica_set_name,
-                 'host': replica_set_member,
-                 'port': MONGODB_PORT}
-        TiDbAdmin().add_shard(url)
-
-    def add_members(self, members):
-        """
-        This method is used by a replica-set member instance.
-        """
-        def check_initiate_status():
-            """
-            This method is used to verify replica-set status.
-            """
-            status = TiDbAdmin().get_repl_status()
-
-            if((status["ok"] == 1) and
-               (status["members"][0]["stateStr"] == "PRIMARY") and
-               (status["myState"] == 1)):
-                return True
-            else:
-                return False
-
-        def check_rs_status():
-            """
-            This method is used to verify replica-set status.
-            """
-            status = TiDbAdmin().get_repl_status()
-            primary_count = 0
-
-            if status["ok"] != 1:
-                return False
-            if len(status["members"]) != (len(members) + 1):
-                return False
-            for rs_member in status["members"]:
-                if rs_member["state"] not in [1, 2, 7]:
-                    return False
-                if rs_member["health"] != 1:
-                    return False
-                if rs_member["state"] == 1:
-                    primary_count += 1
-
-            return primary_count == 1
-
-        TiDbAdmin().rs_initiate()
-        # TODO(ramashri) see if hardcoded values can be removed
-        utils.poll_until(check_initiate_status, sleep_time=30,
-                         time_out=CONF.mongodb.add_members_timeout)
-
-        # add replica-set members
-        TiDbAdmin().rs_add_members(members)
-        # TODO(ramashri) see if hardcoded values can be removed
-        utils.poll_until(check_rs_status, sleep_time=10,
-                         time_out=CONF.mongodb.add_members_timeout)
-
-    def _set_localhost_auth_bypass(self, enabled):
-        """When active, the localhost exception allows connections from the
-        localhost interface to create the first user on the admin database.
-        The exception applies only when there are no users created in the
-        MongoDB instance.
-        """
-        self.configuration_manager.apply_system_override(
-            {'setParameter': {'enableLocalhostAuthBypass': enabled}})
-
-    def get_configuration_property(self, name, default=None):
-        """Return the value of a TiDB configuration property.
-        """
-        return self.configuration_manager.get_value(name, default)
-
-    def prep_primary(self):
-        # Prepare the primary member of a replica set.
-        password = utils.generate_random_password()
-        self.create_admin_user(password)
-        self.restart()
-
-    @property
-    def replica_set_name(self):
-        return TiDBAdmin().get_repl_status()['set']
-
-    def is_shard_active(self, replica_set_name):
-        shards = TiDBAdmin().list_active_shards()
-        if replica_set_name in [shard['_id'] for shard in shards]:
-            LOG.debug('Replica set %s is active.', replica_set_name)
-            return True
-        else:
-            LOG.debug('Replica set %s is not active.', replica_set_name)
-            return False
-
-
 class TiDBAppStatus(service.BaseDbStatus):
 
     def __init__(self, host='localhost', port=None):
         super(TiDBAppStatus, self).__init__()
         self.set_host(host, port=port)
-
-    def set_host(self, host, port=None):
-        # This forces refresh of the 'pymongo' engine cached in the
-        # TiDBClient class.
-        # Authentication is not required to check the server status.
-        TiDBClient(None, host=host, port=port)
-
-    def _get_actual_db_status(self):
-        try:
-            with TiDBClient(None) as client:
-                client.server_info()
-            return ds_instance.ServiceStatuses.RUNNING
-        except (pymongo.errors.ServerSelectionTimeoutError,
-                pymongo.errors.AutoReconnect):
-            return ds_instance.ServiceStatuses.SHUTDOWN
-        except Exception:
-            LOG.exception("Error getting TiDB status.")
-
-        return ds_instance.ServiceStatuses.SHUTDOWN
-
-    def cleanup_stalled_db_services(self):
-        pid, err = utils.execute_with_timeout(system.FIND_PID, shell=True)
-        utils.execute_with_timeout(system.MONGODB_KILL % pid, shell=True)
 
 
 class TiDBAdmin(object):
@@ -381,176 +205,6 @@ class TiDBAdmin(object):
 
     # user is cached by making it a class attribute
     admin_user = None
-
-    def _admin_user(self):
-        if not type(self).admin_user:
-            creds = TiDBCredentials()
-            creds.read(system.MONGO_ADMIN_CREDS_FILE)
-            user = models.TiDBUser(
-                'admin.%s' % creds.username,
-                creds.password
-            )
-            type(self).admin_user = user
-        return type(self).admin_user
-
-    @property
-    def cmd_admin_auth_params(self):
-        """Returns a list of strings that constitute TiDB command line
-        authentication parameters.
-        """
-        user = self._admin_user()
-        return ['--username', user.username,
-                '--password', user.password,
-                '--authenticationDatabase', user.database.name]
-
-    def _create_user_with_client(self, user, client):
-        """Run the add user command."""
-        client[user.database.name].add_user(
-            user.username, password=user.password, roles=user.roles
-        )
-
-    def create_validated_user(self, user, client=None):
-        """Creates a user on their database. The caller should ensure that
-        this action is valid.
-        :param user:   a TiDBUser object
-        """
-        LOG.debug('Creating user %(user)s on database %(db)s with roles '
-                  '%(role)s.',
-                  {'user': user.username, 'db': user.database.name,
-                   'role': str(user.roles)})
-        if client:
-            self._create_user_with_client(user, client)
-        else:
-            with TiDBClient(self._admin_user()) as admin_client:
-                self._create_user_with_client(user, admin_client)
-
-    def create_users(self, users):
-        """Create the given user(s).
-        :param users:   list of serialized user objects
-        """
-        with TiDBClient(self._admin_user()) as client:
-            for item in users:
-                user = models.TiDBUser.deserialize(item)
-                # this could be called to create multiple users at once;
-                # catch exceptions, log the message, and continue
-                try:
-                    user.check_create()
-                    if self._get_user_record(user.name, client=client):
-                        raise ValueError(_('User with name %(user)s already '
-                                           'exists.') % {'user': user.name})
-                    self.create_validated_user(user, client=client)
-                except (ValueError, pymongo.errors.PyMongoError) as e:
-                    LOG.error(e)
-                    LOG.warning('Skipping creation of user with name '
-                                '%(user)s', {'user': user.name})
-
-    def _get_user_record(self, name, client=None):
-        """Get the user's record."""
-        user = models.TiDBUser(name)
-        if user.is_ignored:
-            LOG.warning('Skipping retrieval of user with reserved '
-                        'name %(user)s', {'user': user.name})
-            return None
-        if client:
-            user_info = client.admin.system.users.find_one(
-                {'user': user.username, 'db': user.database.name})
-        else:
-            with TiDBClient(self._admin_user()) as admin_client:
-                user_info = admin_client.admin.system.users.find_one(
-                    {'user': user.username, 'db': user.database.name})
-        if not user_info:
-            return None
-        user.roles = user_info['roles']
-        return user
-
-    def get_existing_user(self, name):
-        """Check that a user exists."""
-        user = self._get_user_record(name)
-        if not user:
-            raise ValueError(_('User with name %(user)s does not'
-                               'exist.') % {'user': name})
-        return user
-
-    def get_user(self, name):
-        """Get information for the given user."""
-        LOG.debug('Getting user %s.', name)
-        user = self._get_user_record(name)
-        if not user:
-            return None
-        return user.serialize()
-
-    def list_users(self, limit=None, marker=None, include_marker=False):
-        """Get a list of all users."""
-        users = []
-        with TiDBClient(self._admin_user()) as admin_client:
-            for user_info in admin_client.admin.system.users.find():
-                user = models.TiDBUser(name=user_info['_id'])
-                user.roles = user_info['roles']
-                if not user.is_ignored:
-                    users.append(user)
-        LOG.debug('users = ' + str(users))
-        return guestagent_utils.serialize_list(
-            users,
-            limit=limit, marker=marker, include_marker=include_marker)
-
-    def create_database(self, databases):
-        """Forces creation of databases.
-        For each new database creates a dummy document in a dummy collection,
-        then drops the collection.
-        """
-        tmp = 'dummy'
-        with TiDBClient(self._admin_user()) as admin_client:
-            for item in databases:
-                schema = models.TiDBSchema.deserialize(item)
-                schema.check_create()
-                LOG.debug('Creating TiDB database %s', schema.name)
-                db = admin_client[schema.name]
-                # FIXME(songjian):can not create database with null content,
-                # so create a collection
-                # db[tmp].insert({'dummy': True})
-                # db.drop_collection(tmp)
-                db.create_collection(tmp)
-
-    def add_shard(self, url):
-        """Runs the addShard command."""
-        with TiDBClient(self._admin_user()) as admin_client:
-            admin_client.admin.command({'addShard': url})
-
-    def get_repl_status(self):
-        """Runs the replSetGetStatus command."""
-        with TiDBClient(self._admin_user()) as admin_client:
-            status = admin_client.admin.command('replSetGetStatus')
-            LOG.debug('Replica set status: %s', status)
-            return status
-
-    def rs_initiate(self):
-        """Runs the replSetInitiate command."""
-        with TiDBClient(self._admin_user()) as admin_client:
-            return admin_client.admin.command('replSetInitiate')
-
-    def rs_add_members(self, members):
-        """Adds the given members to the replication set."""
-        with TiDBClient(self._admin_user()) as admin_client:
-            # get the current config, add the new members, then save it
-            config = admin_client.admin.command('replSetGetConfig')['config']
-            config['version'] += 1
-            next_id = max([m['_id'] for m in config['members']]) + 1
-            for member in members:
-                config['members'].append({'_id': next_id, 'host': member})
-                next_id += 1
-            admin_client.admin.command('replSetReconfig', config)
-
-    def db_stats(self, database, scale=1):
-        """Gets the stats for the given database."""
-        with TiDBClient(self._admin_user()) as admin_client:
-            db_name = models.TiDBSchema.deserialize(database).name
-            return admin_client[db_name].command('dbStats', scale=scale)
-
-    def list_active_shards(self):
-        """Get a list of shards active in this cluster."""
-        with TiDBClient(self._admin_user()) as admin_client:
-            return [shard for shard in admin_client.config.shards.find()]
-
 
 class TiDBClient(object):
     """A wrapper to manage a TiDB connection."""
@@ -565,45 +219,6 @@ class TiDBClient(object):
         :param port: server port, defaults to 27017
         :return:
         """
-        new_client = False
-        self._logged_in = False
-        if not type(self).engine:
-            # no engine cached
-            type(self).engine['host'] = (host if host else 'localhost')
-            type(self).engine['port'] = (port if port else MONGODB_PORT)
-            new_client = True
-        elif host or port:
-            LOG.debug("Updating TiDb client.")
-            if host:
-                type(self).engine['host'] = host
-            if port:
-                type(self).engine['port'] = port
-            new_client = True
-        if new_client:
-            host = type(self).engine['host']
-            port = type(self).engine['port']
-            LOG.debug("Creating TiDb client to %(host)s:%(port)s.",
-                      {'host': host, 'port': port})
-            type(self).engine['client'] = pymongo.MongoClient(host=host,
-                                                              port=port,
-                                                              connect=False)
-        self.session = type(self).engine['client']
-        if user:
-            db_name = user.database.name
-            LOG.debug("Authenticating TiDb client on %s.", db_name)
-            self._db = self.session[db_name]
-            self._db.authenticate(user.username, password=user.password)
-            self._logged_in = True
-
-    def __enter__(self):
-        return self.session
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        LOG.debug("Disconnecting from TiDb.")
-        if self._logged_in:
-            self._db.logout()
-        self.session.close()
-
 
 class TiDbCredentials(object):
     """Handles storing/retrieving credentials. Stored as json in files."""

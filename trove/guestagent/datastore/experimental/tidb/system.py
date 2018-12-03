@@ -26,6 +26,16 @@ TIDB_SERVICE = ["tidb", "tikv"]
 TIDB_KILL = "sudo kill %s"
 FIND_PID = "ps xaco pid,cmd | awk '/ti(db|kv|pd)/ {print $1}'"
 TIME_OUT = 1000
+RUN_SERVER "%s/bin pd-server \
+    --name=%s \
+    --client-urls=%a \
+    --advertise-client-urls=%s \
+    --peer-urls=%s \
+    --advertise-peer-urls=%s \
+    --data-dir=%s \
+    --initial-cluster=%s \
+    --config=conf/pd.toml \
+    --log-file=%s"
 
 TIDB_USER = {operating_system.REDHAT: "tidb",
               operating_system.DEBIAN: "tidb",
